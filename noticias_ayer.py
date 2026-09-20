@@ -192,3 +192,4 @@ if __name__ == "__main__":
         enviar("📈 Bienvenido a las noticias de hoy:\n\nHoy no encontré piezas financieras o cripto lo bastante relevantes.")
     else:
         enviar(armar_mensaje(noticias))
+        
