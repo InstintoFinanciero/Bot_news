@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
@@ -13,12 +14,10 @@ MAX_NOTICIAS = 10
 HORAS = 36
 
 FEEDS = [
-    # Global
     "https://news.google.com/rss/search?q=(Fed+OR+BCE+OR+ECB+OR+bitcoin+OR+crypto+OR+inflation+OR+%22interest+rates%22+OR+markets)+when:1d&hl=en&gl=US&ceid=US:en",
     "https://news.google.com/rss/search?q=(Fed+OR+BCE+OR+bitcoin+OR+criptomonedas+OR+inflaci%C3%B3n+OR+%22tipos+de+inter%C3%A9s%22)+when:1d&hl=es&gl=US&ceid=US:es",
     "https://decrypt.co/feed",
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    # Argentina
     "https://news.google.com/rss/search?q=site:cronista.com+OR+site:ambito.com+OR+site:infobae.com+(d%C3%B3lar+OR+inflaci%C3%B3n+OR+BCRA+OR+tasas+OR+mercado+OR+bitcoin)+when:1d&hl=es-419&gl=AR&ceid=AR:es-419",
     "https://news.google.com/rss/search?q=site:investing.com+(Fed+OR+bitcoin+OR+rates+OR+inflation+OR+markets)+when:1d&hl=es&gl=US&ceid=US:es",
 ]
@@ -78,6 +77,17 @@ def titulo_limpio(titulo):
     return titulo.strip()
 
 
+def resumen_limpio(titulo, resumen):
+    if not resumen:
+        return "Abrí el enlace para ver el detalle."
+    if resumen.lower().startswith(titulo.lower()[:40]):
+        resto = resumen[len(titulo):].strip(" -:.")
+        resumen = resto or resumen
+    if len(resumen) > 220:
+        resumen = resumen[:217].rsplit(" ", 1)[0] + "..."
+    return resumen
+
+
 def es_basura(titulo):
     t = titulo.lower()
     return any(p in t for p in BASURA)
@@ -107,14 +117,43 @@ def fecha_ok(entrada):
     return datetime.now(timezone.utc)
 
 
+def enlace_real(url):
+    if "news.google.com" not in url:
+        return url
+    match = re.search(r"/articles/([A-Za-z0-9_\-]+)", url)
+    if not match:
+        return url
+    raw = match.group(1)
+    raw += "=" * (-len(raw) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(raw).decode("latin-1", errors="ignore")
+        encontrado = re.search(r"https?://[^ \x00-\x1f]+", decoded)
+        if encontrado:
+            return encontrado.group(0).split("\x00")[0]
+    except Exception:
+        pass
+    return url
+
+
 def acortar(url):
+    url = enlace_real(url)
     try:
         r = requests.get(
             "https://is.gd/create.php",
             params={"format": "simple", "url": url},
             timeout=15,
         )
-        if r.ok and r.text.startswith("http"):
+        if r.ok and r.text.startswith("http") and "news.google.com" not in r.text:
+            return r.text.strip()
+    except Exception:
+        pass
+    try:
+        r = requests.get(
+            "https://tinyurl.com/api-create.php",
+            params={"url": url},
+            timeout=15,
+        )
+        if r.ok and r.text.startswith("http") and "news.google.com" not in r.text:
             return r.text.strip()
     except Exception:
         pass
@@ -132,8 +171,7 @@ def recoger():
             titulo = titulo_limpio(entrada.get("title") or "Sin título")
             enlace = (entrada.get("link") or "").strip()
             resumen = texto_limpio(entrada.get("summary") or entrada.get("description") or "")
-            if len(resumen) > 220:
-                resumen = resumen[:217].rsplit(" ", 1)[0] + "..."
+            resumen = resumen_limpio(titulo, resumen)
 
             if not enlace or es_basura(titulo):
                 continue
@@ -149,16 +187,14 @@ def recoger():
 
             noticias.append({
                 "titulo": titulo,
-                "resumen": resumen or "Abrí el enlace para ver el detalle.",
+                "resumen": resumen,
                 "enlace": enlace,
                 "argentina": es_argentina(titulo, resumen, enlace),
             })
 
-    # Mezcla: primero algo de Argentina si hay, después el resto
     ar = [n for n in noticias if n["argentina"]]
     resto = [n for n in noticias if not n["argentina"]]
-    ordenadas = (ar[:4] + resto)[:MAX_NOTICIAS]
-    return ordenadas
+    return (ar[:4] + resto)[:MAX_NOTICIAS]
 
 
 def armar_mensaje(noticias):
@@ -192,4 +228,3 @@ if __name__ == "__main__":
         enviar("📈 Bienvenido a las noticias de hoy:\n\nHoy no encontré piezas financieras o cripto lo bastante relevantes.")
     else:
         enviar(armar_mensaje(noticias))
-        
