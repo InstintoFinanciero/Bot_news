@@ -11,46 +11,39 @@ TOKEN = os.environ["TELEGRAM_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 MAX_NOTICIAS = 5
+MAX_POR_TEMA = 2
 HORAS = 36
 
 FEEDS = [
-    "https://news.google.com/rss/search?q=(Fed+OR+FOMC+OR+Powell+OR+gold+OR+oro+OR+bitcoin+OR+BTC+OR+inflation+OR+%22interest+rates%22)+when:1d&hl=en&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=(Fed+OR+Powell+OR+oro+OR+bitcoin+OR+inflaci%C3%B3n+OR+%22tipos+de+inter%C3%A9s%22)+when:1d&hl=es&gl=US&ceid=US:es",
+    "https://news.google.com/rss/search?q=(Fed+OR+FOMC+OR+Powell+OR+%22interest+rates%22+OR+inflation)+when:1d&hl=en&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=(gold+OR+oro+OR+XAU)+when:1d&hl=en&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=(bitcoin+OR+BTC)+when:1d&hl=en&gl=US&ceid=US:en",
+    "https://news.google.com/rss/search?q=(Fed+OR+Powell+OR+oro+OR+bitcoin)+when:1d&hl=es&gl=US&ceid=US:es",
     "https://decrypt.co/feed",
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "https://news.google.com/rss/search?q=site:cronista.com+OR+site:ambito.com+OR+site:infobae.com+(Fed+OR+oro+OR+bitcoin+OR+d%C3%B3lar+OR+BCRA+OR+tasas)+when:1d&hl=es-419&gl=AR&ceid=AR:es-419",
-    "https://news.google.com/rss/search?q=site:investing.com+(Fed+OR+gold+OR+oro+OR+bitcoin+OR+rates+OR+inflation)+when:1d&hl=es&gl=US&ceid=US:es",
+    "https://news.google.com/rss/search?q=site:cronista.com+OR+site:ambito.com+OR+site:infobae.com+(Fed+OR+oro+OR+bitcoin)+when:1d&hl=es-419&gl=AR&ceid=AR:es-419",
+    "https://news.google.com/rss/search?q=site:investing.com+(Fed+OR+gold+OR+oro+OR+bitcoin)+when:1d&hl=es&gl=US&ceid=US:es",
 ]
 
-FUENTES_OK = (
-    "investing.com", "decrypt.co", "coindesk.com", "cointelegraph.com",
-    "reuters.com", "bloomberg.com", "ft.com", "wsj.com", "cnbc.com",
-    "expansion.com", "eleconomista.es", "cronista.com", "ambito.com",
-    "infobae.com", "lanacion.com.ar", "criptonoticias.com",
-)
-
 TEMA_OK = (
-    "fed", "fomc", "powell", "bce", "ecb", "tasa", "tasas", "interés", "interes",
-    "inflation", "inflación", "inflacion", "bitcoin", "btc", "ethereum",
-    "crypto", "cripto", "mercado", "bolsa", "wall street", "bonos",
-    "tesoro", "dólar", "dolar", "bcra", "peso", "oil", "petróleo",
+    "fed", "fomc", "powell", "tasa", "tasas", "interés", "interes",
+    "inflation", "inflación", "inflacion", "bitcoin", "btc",
     "oro", "gold", "xau",
 )
 
 BASURA = (
     "análisis técnico", "analisis tecnico", "gráfico", "grafico",
     "foro ", "0p000", "hedged", "perpetual", "ultra short",
-    "focused large cap", "swan ultra", "florida bar", "judgments",
-    "decrees", "receta", "horóscopo", "horoscopo",
+    "florida bar", "judgments", "decrees", "wallet",
+    "how the fed interest rate hike will hit your wallet",
 )
 
 PRIORIDAD = {
     "fed": 100, "federal reserve": 100, "fomc": 95, "powell": 95,
     "oro": 90, "gold": 90, "xau": 90,
     "bitcoin": 88, "btc": 88,
-    "tasa": 70, "tasas": 70, "interés": 70, "interes": 70,
+    "tasa": 70, "tasas": 70,
     "inflation": 65, "inflación": 65, "inflacion": 65,
-    "dólar": 50, "dolar": 50, "cripto": 40, "crypto": 40,
 }
 
 
@@ -68,39 +61,44 @@ def titulo_limpio(titulo):
     return titulo.strip()
 
 
-def fuente_de(titulo, enlace):
-    blob = f"{titulo} {enlace}".lower()
-    for f in FUENTES_OK:
-        if f in blob:
-            return f
-    return ""
+def resumen_corto(titulo, resumen):
+    t = (resumen or "").strip()
+    if t.lower().startswith((titulo or "").lower()[:40]):
+        t = t[len(titulo):].strip(" -:.")
+    t = re.sub(r"\s+", " ", t)
+    if len(t) < 20:
+        return "Abrí el enlace para ver el detalle."
+    if len(t) > 110:
+        t = t[:107].rsplit(" ", 1)[0] + "…"
+    return t
 
 
 def es_basura(titulo):
-    t = titulo.lower()
-    return any(p in t for p in BASURA)
+    return any(p in titulo.lower() for p in BASURA)
 
 
-def es_relevante(titulo, resumen, enlace):
-    blob = f"{titulo} {resumen} {enlace}".lower()
-    return any(p in blob for p in TEMA_OK)
-
-
-def puntaje(titulo, resumen, enlace):
-    blob = f"{titulo} {resumen} {enlace}".lower()
+def puntaje(blob):
     pts = [v for k, v in PRIORIDAD.items() if k in blob]
-    return max(pts) if pts else 10
+    return max(pts) if pts else 0
 
 
-def grupo(titulo, resumen):
+def clasificar(titulo, resumen):
     t = f"{titulo} {resumen}".lower()
-    if any(k in t for k in ("fed", "fomc", "powell", "tasa", "tasas", "inflation", "inflación", "inflacion")):
-        return "🏦 FED / Macro"
-    if any(k in t for k in ("oro", "gold", "xau")):
+    es_oro = any(k in t for k in ("oro", "gold", "xau", "bullion"))
+    es_btc = any(k in t for k in ("bitcoin", "btc"))
+    es_fed = any(k in t for k in ("fed", "fomc", "powell", "federal reserve"))
+
+    if es_oro and not es_btc:
         return "🥇 Oro"
-    if any(k in t for k in ("bitcoin", "btc", "cripto", "crypto", "ethereum")):
-        return "🪙 Cripto"
-    return "📌 Extra"
+    if es_btc and not es_oro:
+        return "🪙 Bitcoin"
+    if es_fed:
+        return "🏦 Fed / macro"
+    if es_oro:
+        return "🥇 Oro"
+    if es_btc:
+        return "🪙 Bitcoin"
+    return None
 
 
 def fecha_ok(entrada):
@@ -136,7 +134,7 @@ def enlace_real(url):
 def recoger():
     limite = datetime.now(timezone.utc) - timedelta(hours=HORAS)
     vistas = set()
-    noticias = []
+    por_tema = {"🏦 Fed / macro": [], "🥇 Oro": [], "🪙 Bitcoin": []}
 
     for url in FEEDS:
         feed = feedparser.parse(url)
@@ -144,12 +142,14 @@ def recoger():
             titulo = titulo_limpio(entrada.get("title") or "Sin título")
             enlace = enlace_real((entrada.get("link") or "").strip())
             resumen = texto_limpio(entrada.get("summary") or entrada.get("description") or "")
+            tema = clasificar(titulo, resumen)
+            blob = f"{titulo} {resumen}".lower()
 
-            if not enlace or es_basura(titulo):
+            if not enlace or not tema or es_basura(titulo):
                 continue
             if fecha_ok(entrada) < limite:
                 continue
-            if not es_relevante(titulo, resumen, enlace):
+            if not any(p in blob for p in TEMA_OK):
                 continue
 
             clave = titulo.lower()
@@ -157,40 +157,59 @@ def recoger():
                 continue
             vistas.add(clave)
 
-            noticias.append({
+            por_tema[tema].append({
                 "titulo": titulo,
+                "resumen": resumen_corto(titulo, resumen),
                 "enlace": enlace,
-                "fuente": fuente_de(titulo, enlace),
-                "grupo": grupo(titulo, resumen),
-                "pts": puntaje(titulo, resumen, enlace),
+                "tema": tema,
+                "pts": puntaje(blob),
             })
 
-    noticias.sort(key=lambda n: n["pts"], reverse=True)
-    return noticias[:MAX_NOTICIAS]
+    for tema in por_tema:
+        por_tema[tema].sort(key=lambda n: n["pts"], reverse=True)
+
+    elegidas = []
+    # 1 de cada tema primero, para que no salgan 5 de FED
+    for tema in ("🏦 Fed / macro", "🥇 Oro", "🪙 Bitcoin"):
+        if por_tema[tema]:
+            elegidas.append(por_tema[tema].pop(0))
+
+    # completar hasta 5, máx 2 por tema
+    resto = []
+    for tema, items in por_tema.items():
+        resto.extend(items)
+    resto.sort(key=lambda n: n["pts"], reverse=True)
+
+    conteo = {}
+    for n in elegidas:
+        conteo[n["tema"]] = conteo.get(n["tema"], 0) + 1
+
+    for n in resto:
+        if len(elegidas) >= MAX_NOTICIAS:
+            break
+        if conteo.get(n["tema"], 0) >= MAX_POR_TEMA:
+            continue
+        elegidas.append(n)
+        conteo[n["tema"]] = conteo.get(n["tema"], 0) + 1
+
+    return elegidas[:MAX_NOTICIAS]
 
 
 def armar_mensaje(noticias):
     dias = {
         "Monday": "lunes", "Tuesday": "martes", "Wednesday": "miércoles",
-        "Thursday": "jueves", "Friday": "viernes", "Saturday": "sábado",
-        "Sunday": "domingo",
+        "Thursday": "jueves", "Friday": "viernes",
+        "Saturday": "sábado", "Sunday": "domingo",
     }
     hoy = datetime.now()
     dia = dias.get(hoy.strftime("%A"), hoy.strftime("%A"))
     lineas = [f"📰 <b>Noticias</b> · {dia} {hoy:%d/%m}", ""]
 
-    orden = ["🏦 FED / Macro", "🥇 Oro", "🪙 Cripto", "📌 Extra"]
-    nro = 1
-    for g in orden:
-        items = [x for x in noticias if x["grupo"] == g]
-        if not items:
-            continue
-        lineas.append(f"<b>{g}</b>")
-        for it in items:
-            lineas.append(f'{nro}. <a href="{it["enlace"]}">{it["titulo"]}</a>')
-            if it["fuente"]:
-                lineas.append(f"   {it['fuente']}")
-            nro += 1
+    for i, n in enumerate(noticias, start=1):
+        lineas.append(f"{i}) {n['tema']}")
+        lineas.append(n["titulo"])
+        lineas.append(n["resumen"])
+        lineas.append(n["enlace"])
         lineas.append("")
     return "\n".join(lineas).strip()
 
@@ -202,7 +221,6 @@ def enviar(texto):
         json={
             "chat_id": CHAT_ID,
             "text": texto,
-            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         },
         timeout=30,
@@ -212,6 +230,6 @@ def enviar(texto):
 if __name__ == "__main__":
     noticias = recoger()
     if not noticias:
-        enviar("📰 <b>Noticias</b>\n\nHoy no hubo piezas fuertes de FED, oro o Bitcoin.")
+        enviar("📰 Noticias\n\nHoy no hubo piezas fuertes de FED, oro o Bitcoin.")
     else:
         enviar(armar_mensaje(noticias))
