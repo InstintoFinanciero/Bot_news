@@ -4,7 +4,6 @@ import base64
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
-from urllib.parse import quote
 import requests
 import feedparser
 
@@ -60,6 +59,13 @@ def titulo_limpio(titulo):
     return titulo.strip()
 
 
+def normalizar(texto):
+    t = texto.lower()
+    t = re.sub(r"[^a-záéíóúñ0-9\s]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 def parece_ingles(texto):
     t = f" {texto.lower()} "
     marcas = (" the ", " and ", " of ", " to ", " as ", " for ", " with ", " from ", " on ")
@@ -98,11 +104,21 @@ def traducir(texto):
 
 
 def resumen_es(titulo, resumen):
+    tit = texto_limpio(titulo)
     base = texto_limpio(resumen)
-    if not base or base.lower().startswith((titulo or "").lower()[:30]):
-        base = titulo
+
+    if base.lower().startswith(tit.lower()[:35]):
+        base = base[len(tit):].strip(" -:.")
+
+    if len(base) < 25:
+        return "Más detalle en el enlace."
+
     base = traducir(base)
     base = re.sub(r"\s+", " ", base).strip()
+
+    if normalizar(base)[:40] == normalizar(tit)[:40]:
+        return "Más detalle en el enlace."
+
     if len(base) > 110:
         base = base[:107].rsplit(" ", 1)[0] + "…"
     return base
@@ -133,6 +149,15 @@ def clasificar(titulo, resumen):
     if es_btc:
         return "🪙 Bitcoin"
     return None
+
+
+def es_parecida(a, b):
+    pa = set(normalizar(a).split())
+    pb = set(normalizar(b).split())
+    if not pa or not pb:
+        return False
+    comunes = pa & pb
+    return len(comunes) / min(len(pa), len(pb)) >= 0.6
 
 
 def fecha_ok(entrada):
@@ -216,18 +241,21 @@ def recoger():
             if not any(p in blob for p in TEMA_OK):
                 continue
 
-            clave = titulo.lower()
+            clave = normalizar(titulo)
             if clave in vistas:
                 continue
             vistas.add(clave)
 
-            por_tema[tema].append({
+            item = {
                 "titulo": titulo,
                 "resumen": resumen_es(titulo, resumen),
                 "enlace": enlace,
                 "tema": tema,
                 "pts": puntaje(blob),
-            })
+            }
+            if any(es_parecida(item["titulo"], x["titulo"]) for x in por_tema[tema]):
+                continue
+            por_tema[tema].append(item)
 
     for tema in por_tema:
         por_tema[tema].sort(key=lambda n: n["pts"], reverse=True)
@@ -251,6 +279,8 @@ def recoger():
             break
         if conteo.get(n["tema"], 0) >= MAX_POR_TEMA:
             continue
+        if any(es_parecida(n["titulo"], x["titulo"]) for x in elegidas):
+            continue
         elegidas.append(n)
         conteo[n["tema"]] = conteo.get(n["tema"], 0) + 1
 
@@ -272,7 +302,8 @@ def armar_mensaje(noticias):
     for i, n in enumerate(noticias, start=1):
         lineas.append(f"{i}) {n['tema']}")
         lineas.append(n["titulo"])
-        lineas.append(n["resumen"])
+        if normalizar(n["resumen"]) != normalizar(n["titulo"]):
+            lineas.append(n["resumen"])
         lineas.append(n["enlace"])
         lineas.append("")
     return "\n".join(lineas).strip()
